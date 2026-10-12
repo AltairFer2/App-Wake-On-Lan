@@ -1,0 +1,5 @@
+package com.altair.altair_wake
+
+import io.flutter.embedding.android.FlutterActivity
+
+class MainActivity : FlutterActivity()
