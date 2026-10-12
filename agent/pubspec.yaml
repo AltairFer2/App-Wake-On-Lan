@@ -1,0 +1,16 @@
+name: altair_wake_agent
+description: Agente de Windows que recibe órdenes autenticadas de Altair Wake.
+publish_to: 'none'
+version: 1.0.0
+
+environment:
+  sdk: ^3.12.1
+
+dependencies:
+  altair_agent_protocol:
+    path: ../packages/altair_agent_protocol
+  ffi: ^2.1.0
+
+dev_dependencies:
+  lints: ^6.0.0
+  test: ^1.25.0
