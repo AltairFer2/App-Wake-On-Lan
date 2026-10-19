@@ -113,13 +113,28 @@ void main() {
       expect(viewport.scale, viewport.fitScale);
     });
 
-    test('focus encaja un monitor y el desplazamiento no deja huecos', () {
+    test('focus encaja un monitor y ni el desplazamiento ni el zoom salen de él', () {
       final viewport = RdpViewport(const Size(4000, 1000))..resize(const Size(400, 200));
       viewport.focus(const Rect.fromLTWH(2000, 0, 2000, 1000));
       expect(viewport.scale, 0.2);
       expect(viewport.toDesktop(Offset.zero), const Offset(2000, 0));
       viewport.panBy(const Offset(10000, 0));
-      expect(viewport.origin.dx, 0);
+      expect(viewport.toDesktop(Offset.zero), const Offset(2000, 0));
+      viewport.zoomAt(Offset.zero, 0.01);
+      expect(viewport.scale, 0.2);
+    });
+
+    test('el monitor encuadrado se conserva al girar el teléfono', () {
+      final viewport = RdpViewport(const Size(3840, 1080))..resize(const Size(400, 800));
+      const second = Rect.fromLTWH(1920, 0, 1920, 1080);
+      viewport.focus(second);
+      expect(viewport.zoomedIn, isFalse);
+      viewport.resize(const Size(800, 400));
+      expect(viewport.focusArea, second);
+      expect(viewport.toScreenRect(second).width, closeTo(711.1, 0.1));
+      expect(viewport.toVisibleDesktop(Offset.zero).dx, 1920);
+      viewport.showAll();
+      expect(viewport.focusArea, isNull);
     });
 
     test('reveal desplaza la vista solo si el punto queda cerca del borde', () {

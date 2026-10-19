@@ -28,7 +28,12 @@ enum AgentCommand {
   /// Enciende la pantalla y mantiene el equipo despierto un tiempo. Tras un
   /// despertar por red, Windows deja la pantalla apagada y vuelve a dormirse
   /// a los 2 min si nadie lo usa.
-  wakeDisplay('display');
+  wakeDisplay('display'),
+
+  /// Abre un túnel hacia el Escritorio remoto del PC por la misma conexión.
+  /// RDP sigue cerrado a Internet: solo se llega a él a través del agente,
+  /// con la clave. Ver `tunnel.dart`.
+  remoteDesktop('rdp');
 
   const AgentCommand(this.wireName);
 

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -205,6 +206,142 @@ void main() {
 
     test('cierra sin responder si la línea supera el límite', () async {
       expect(await exchange('${'x' * (maxMessageBytes + 10)}\n'), isEmpty);
+    });
+  });
+
+  group('Túnel de escritorio remoto', () {
+    /// Hace de RDP: devuelve en mayúsculas lo que recibe.
+    late ServerSocket fakeRdp;
+    late RequestHandler tunnelHandler;
+    late AgentServer server;
+
+    setUp(() async {
+      fakeRdp = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      fakeRdp.listen(
+        (socket) => socket
+            .addStream(socket.map((chunk) => utf8.encode(utf8.decode(chunk).toUpperCase())))
+            .then((_) => socket.close()),
+      );
+      tunnelHandler = RequestHandler(
+        key: key,
+        actions: actions,
+        remoteDesktop: localRemoteDesktop(fakeRdp.port),
+      );
+      server = AgentServer(
+        handler: tunnelHandler,
+        logger: AgentLogger(null),
+        port: 0,
+        readTimeout: const Duration(seconds: 1),
+      );
+      await server.start();
+    });
+
+    tearDown(() async {
+      await server.close();
+      await fakeRdp.close();
+    });
+
+    /// Abre el túnel como lo hace la app y devuelve lo necesario para usarlo.
+    Future<({Socket socket, AgentResponse response, Stream<List<int>> fromAgent, TunnelKeys keys})>
+    openTunnel([AgentKey? signingKey]) async {
+      final request = AgentRequest.create(AgentCommand.remoteDesktop, DateTime.now());
+      final socket = await Socket.connect(InternetAddress.loopbackIPv4, server.boundPort);
+      socket.write('${request.encode(signingKey ?? key)}\n');
+      await socket.flush();
+      final first = await readFirstLine(socket, timeout: const Duration(seconds: 2));
+      final response = AgentResponse.decodeAndVerify(
+        first.line!,
+        key,
+        expectedNonce: request.nonce,
+      );
+      return (
+        socket: socket,
+        response: response,
+        fromAgent: first.rest,
+        keys: TunnelKeys.derive(key, request.nonce),
+      );
+    }
+
+    test('los datos viajan en tramas autenticadas hasta RDP y de vuelta', () async {
+      final tunnel = await openTunnel();
+      expect(tunnel.response.result, tunnelResult);
+
+      final toAgent = StreamController<List<int>>();
+      unawaited(tunnel.socket.addStream(encodeTunnelFrames(toAgent.stream, tunnel.keys.appToAgent)));
+      final replies = decodeTunnelFrames(tunnel.fromAgent, tunnel.keys.agentToApp);
+      toAgent.add(utf8.encode('hola'));
+      expect(utf8.decode(await replies.first), 'HOLA');
+
+      await toAgent.close();
+      tunnel.socket.destroy();
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(tunnelHandler.activeTunnels, 0);
+    });
+
+    test('una trama alterada cierra el túnel', () async {
+      final tunnel = await openTunnel();
+      final frame = [
+        for (final part in await encodeTunnelFrames(
+          Stream.value(utf8.encode('hola')),
+          tunnel.keys.appToAgent,
+        ).toList())
+          ...part,
+      ];
+      frame[5] ^= 0xFF;
+      tunnel.socket.add(frame);
+      await tunnel.socket.flush();
+      // El agente corta sin devolver nada.
+      expect(await tunnel.fromAgent.toList(), isEmpty);
+      tunnel.socket.destroy();
+      expect(tunnelHandler.activeTunnels, 0);
+    });
+
+    test('sin la clave no se abre ni se responde', () async {
+      final request = AgentRequest.create(AgentCommand.remoteDesktop, DateTime.now());
+      final socket = await Socket.connect(InternetAddress.loopbackIPv4, server.boundPort);
+      socket.write('${request.encode(AgentKey.generate())}\n');
+      expect(await socket.toList(), isEmpty);
+      socket.destroy();
+      expect(tunnelHandler.activeTunnels, 0);
+    });
+
+    test('sin escritorio remoto en el PC responde failed', () async {
+      final unavailable = RequestHandler(
+        key: key,
+        actions: actions,
+        clock: () => now,
+        remoteDesktop: () => throw const SocketException('Connection refused'),
+      );
+      final request = AgentRequest.create(AgentCommand.remoteDesktop, now);
+      final handled = await unavailable.handle(request.encode(key), 'x');
+      expect(responseOf(handled, request).error, AgentErrorCode.failed);
+      expect(handled.tunnel, isNull);
+    });
+
+    test('limita las sesiones simultáneas', () async {
+      final limited = RequestHandler(
+        key: key,
+        actions: actions,
+        clock: () => now,
+        remoteDesktop: localRemoteDesktop(fakeRdp.port),
+      );
+      final opened = <AgentTunnel>[];
+      for (var i = 0; i < RequestHandler.maxTunnels; i++) {
+        final request = AgentRequest.create(AgentCommand.remoteDesktop, now);
+        opened.add((await limited.handle(request.encode(key), 'x')).tunnel!);
+      }
+      final extra = AgentRequest.create(AgentCommand.remoteDesktop, now);
+      final refused = await limited.handle(extra.encode(key), 'x');
+      expect(refused.tunnel, isNull);
+      expect(responseOf(refused, extra).error, AgentErrorCode.failed);
+
+      for (final tunnel in opened) {
+        tunnel
+          ..release()
+          ..release()
+          ..remoteDesktop.destroy();
+      }
+      expect(limited.activeTunnels, 0);
     });
   });
 }

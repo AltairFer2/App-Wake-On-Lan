@@ -11,6 +11,7 @@ import 'core/security/agent_key_store.dart';
 import 'features/devices/data/device_repository.dart';
 import 'features/power_control/data/agent_client.dart';
 import 'features/power_control/domain/power_control_service.dart';
+import 'features/remote_desktop/domain/remote_desktop_router.dart';
 import 'features/wake_on_lan/domain/wake_confirmer.dart';
 import 'features/wake_on_lan/domain/wake_service.dart';
 
@@ -33,6 +34,7 @@ Future<void> main() async {
       client: AgentClient(),
       keyStore: agentKeyStore,
     ),
+    remoteDesktopRouter: const RemoteDesktopRouter(keyStore: agentKeyStore),
   );
   runApp(AltairWakeApp(dependencies: dependencies));
 }

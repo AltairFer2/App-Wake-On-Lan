@@ -11,6 +11,7 @@ import '../../remote_desktop/data/rdp_client.dart';
 import '../../remote_desktop/data/remote_desktop_launcher.dart';
 import '../../remote_desktop/domain/monitor_layout.dart';
 import '../../remote_desktop/domain/remote_desktop.dart';
+import '../../remote_desktop/domain/remote_desktop_router.dart';
 import '../../remote_desktop/presentation/rdp_credentials_dialog.dart';
 import '../../remote_desktop/presentation/rdp_session_screen.dart';
 import '../domain/device.dart';
@@ -166,7 +167,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (host == null || port == null) return;
     final rdpClient = widget.dependencies.rdpClient;
     if (await rdpClient.isSupported()) {
-      await _openIntegratedRemoteDesktop(device, host, port, rdpClient);
+      await _openIntegratedRemoteDesktop(device, rdpClient);
       return;
     }
     final launch = await widget.dependencies.remoteDesktop.open(host, port);
@@ -183,12 +184,8 @@ class _HomeScreenState extends State<HomeScreen> {
     if (message != null) _showMessage(message);
   }
 
-  Future<void> _openIntegratedRemoteDesktop(
-    Device device,
-    String host,
-    int port,
-    RdpClient client,
-  ) async {
+  /// En casa conecta directo; fuera, por el túnel del agente.
+  Future<void> _openIntegratedRemoteDesktop(Device device, RdpClient client) async {
     if (!mounted) return;
     final monitors = MonitorLayout.tryParse(device.remoteDesktopMonitors);
     final credentials = await showDialog<RdpCredentials>(
@@ -199,19 +196,62 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
     if (credentials == null || !mounted) return;
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => RdpSessionScreen(
-          client: client,
-          title: device.name,
-          host: host,
-          port: port,
-          username: credentials.username,
-          password: credentials.password,
-          monitors: credentials.allMonitors ? monitors : monitors?.primaryOnly,
+    final endpoint = await _findRemoteDesktop(device);
+    if (endpoint == null) return;
+    if (!mounted) {
+      await endpoint.close();
+      return;
+    }
+    try {
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => RdpSessionScreen(
+            client: client,
+            title: device.name,
+            host: endpoint.host,
+            port: endpoint.port,
+            username: credentials.username,
+            password: credentials.password,
+            monitors: credentials.allMonitors ? monitors : monitors?.primaryOnly,
+          ),
+        ),
+      );
+    } finally {
+      await endpoint.close();
+    }
+  }
+
+  /// Red local si RDP responde; si no, el túnel del agente. `null` (con
+  /// aviso) si no hay forma de llegar.
+  Future<RemoteDesktopEndpoint?> _findRemoteDesktop(Device device) async {
+    final navigator = Navigator.of(context);
+    unawaited(
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => AlertDialog(
+          content: Row(
+            children: [
+              const CircularProgressIndicator(),
+              const SizedBox(width: 24),
+              Expanded(child: Text('Buscando ${device.name}…')),
+            ],
+          ),
         ),
       ),
     );
+    try {
+      final endpoint = await widget.dependencies.remoteDesktopRouter.connect(device);
+      if (endpoint.viaAgent) _showMessage('Fuera de casa: conectando a través del agente.');
+      return endpoint;
+    } on RemoteDesktopRouteException catch (error) {
+      _showMessage(error.message);
+    } on StorageException catch (error) {
+      _showMessage(error.message);
+    } finally {
+      navigator.pop();
+    }
+    return null;
   }
 
   void _openDiagnostics([Device? device]) {

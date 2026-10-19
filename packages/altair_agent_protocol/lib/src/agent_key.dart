@@ -51,6 +51,11 @@ final class AgentKey {
   String sign(String message) =>
       Hmac(sha256, _bytes).convert(utf8.encode(message)).toString();
 
+  /// Clave de 256 bits derivada para un uso concreto ([label]); no revela
+  /// la clave original.
+  Uint8List derive(String label) =>
+      Uint8List.fromList(Hmac(sha256, _bytes).convert(utf8.encode(label)).bytes);
+
   /// Compara la firma en tiempo constante para no filtrar información por
   /// tiempos de respuesta.
   bool verify(String message, String signature) {

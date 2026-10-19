@@ -1,14 +1,13 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:altair_agent_protocol/altair_agent_protocol.dart';
 
 import 'agent_logger.dart';
 import 'request_handler.dart';
 
-/// Servidor TCP: una petición por conexión, terminada en salto de línea.
+/// Servidor TCP: una petición por conexión, terminada en salto de línea. La
+/// orden de escritorio remoto convierte después la conexión en un túnel.
 class AgentServer {
   AgentServer({
     required this._handler,
@@ -43,7 +42,8 @@ class AgentServer {
   Future<void> _handleConnection(Socket socket) async {
     final source = socket.remoteAddress.address;
     try {
-      final line = await _readLine(socket);
+      final first = await readFirstLine(socket, timeout: readTimeout);
+      final line = first.line;
       // Las conexiones sin petición son, en su mayoría, sondeos de estado de
       // la app; no se registran para no llenar el registro.
       if (line == null) return;
@@ -53,6 +53,11 @@ class AgentServer {
       if (response != null) {
         socket.write('$response\n');
         await socket.flush();
+      }
+      final tunnel = handled.tunnel;
+      if (tunnel != null) {
+        await _relay(socket, first.rest, tunnel, source);
+        return;
       }
       final action = handled.afterResponse;
       if (action != null) {
@@ -65,43 +70,43 @@ class AgentServer {
     }
   }
 
+  /// Pasa los datos entre el teléfono (tramas autenticadas) y el Escritorio
+  /// remoto hasta que cualquiera de los dos cierre o llegue una trama
+  /// inválida.
+  Future<void> _relay(
+    Socket phone,
+    Stream<List<int>> fromPhone,
+    AgentTunnel tunnel,
+    String source,
+  ) async {
+    final remoteDesktop = tunnel.remoteDesktop;
+    var reason = 'cerrado';
+    try {
+      await Future.wait([
+        remoteDesktop
+            .addStream(decodeTunnelFrames(fromPhone, tunnel.keys.appToAgent))
+            .then((_) => remoteDesktop.close()),
+        phone
+            .addStream(encodeTunnelFrames(remoteDesktop, tunnel.keys.agentToApp))
+            .then((_) => phone.close()),
+      ], eagerError: true);
+    } on TunnelIntegrityException catch (error) {
+      reason = 'trama rechazada (${error.message})';
+    } on SocketException catch (error) {
+      reason = 'error de socket (${error.message})';
+    } finally {
+      remoteDesktop.destroy();
+      tunnel.release();
+      _logger.info('$source rdp: túnel $reason');
+    }
+  }
+
   Future<void> _runDeferred(Future<void> Function() action) async {
     await Future<void>.delayed(actionDelay);
     try {
       await action();
     } on Exception catch (error) {
       _logger.info('Error al ejecutar la acción: $error');
-    }
-  }
-
-  /// Lee hasta el primer salto de línea con límite de tamaño y de tiempo.
-  Future<String?> _readLine(Socket socket) async {
-    final buffer = BytesBuilder(copy: false);
-    final completer = Completer<String?>();
-    late final StreamSubscription<List<int>> subscription;
-    subscription = socket.listen(
-      (chunk) {
-        final newline = chunk.indexOf(10);
-        buffer.add(newline == -1 ? chunk : chunk.sublist(0, newline));
-        if (buffer.length > maxMessageBytes) {
-          completer.complete(null);
-        } else if (newline != -1) {
-          completer.complete(utf8.decode(buffer.takeBytes(), allowMalformed: true));
-        }
-        if (completer.isCompleted) subscription.pause();
-      },
-      onError: (Object _) {
-        if (!completer.isCompleted) completer.complete(null);
-      },
-      onDone: () {
-        if (!completer.isCompleted) completer.complete(null);
-      },
-      cancelOnError: true,
-    );
-    try {
-      return await completer.future.timeout(readTimeout, onTimeout: () => null);
-    } finally {
-      await subscription.cancel();
     }
   }
 }

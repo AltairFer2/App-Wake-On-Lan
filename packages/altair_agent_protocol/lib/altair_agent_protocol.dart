@@ -6,3 +6,4 @@ library;
 export 'src/agent_key.dart';
 export 'src/messages.dart';
 export 'src/replay_guard.dart';
+export 'src/tunnel.dart';

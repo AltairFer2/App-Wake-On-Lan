@@ -8,6 +8,7 @@ import 'package:altair_wake/features/power_control/data/agent_client.dart';
 import 'package:altair_wake/features/power_control/domain/power_control_service.dart';
 import 'package:altair_wake/features/remote_desktop/data/rdp_client.dart';
 import 'package:altair_wake/features/remote_desktop/data/remote_desktop_launcher.dart';
+import 'package:altair_wake/features/remote_desktop/domain/remote_desktop_router.dart';
 import 'package:altair_wake/features/wake_on_lan/domain/wake_confirmer.dart';
 import 'package:altair_wake/features/wake_on_lan/domain/wake_service.dart';
 import 'package:flutter/material.dart';
@@ -22,6 +23,7 @@ AppDependencies buildDependencies(
   PowerControlService? powerControl,
   RemoteDesktopLauncher? remoteDesktop,
   RdpClient? rdpClient,
+  RemoteDesktopRouter? remoteDesktopRouter,
 ]) {
   final resolver = FakeAddressResolver();
   final keys = keyStore ?? InMemoryAgentKeyStore();
@@ -45,6 +47,10 @@ AppDependencies buildDependencies(
         PowerControlService(client: const AgentClient(), keyStore: keys),
     remoteDesktop: remoteDesktop ?? FakeRemoteDesktopLauncher(),
     rdpClient: rdpClient ?? FakeRdpClient(supported: false),
+    // En las pruebas RDP "responde" en la red local: sin sockets reales.
+    remoteDesktopRouter:
+        remoteDesktopRouter ??
+        RemoteDesktopRouter(keyStore: keys, probe: (_, _) async => true),
   );
 }
 
@@ -209,6 +215,43 @@ void main() {
       expect(rdp.disconnects, 1);
       expect(find.text('Conectando…'), findsNothing);
       expect(find.text('PC Escritorio'), findsOneWidget);
+    });
+
+    testWidgets('sin ruta al escritorio remoto avisa y no abre la sesión', (tester) async {
+      final rdp = FakeRdpClient();
+      final repository = InMemoryDeviceRepository([
+        // Sin agente: fuera de casa no hay túnel posible.
+        sampleDevice(remoteDesktopPort: 3389),
+      ]);
+      final keys = InMemoryAgentKeyStore();
+      await tester.pumpWidget(
+        AltairWakeApp(
+          dependencies: buildDependencies(
+            repository,
+            keys,
+            ReachabilityStatus.reachable,
+            FakePowerControl(),
+            FakeRemoteDesktopLauncher(),
+            rdp,
+            RemoteDesktopRouter(keyStore: keys, probe: (_, _) async => false),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Escritorio'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Usuario de Windows'),
+        'usuario',
+      );
+      await tester.tap(find.widgetWithText(FilledButton, 'Conectar'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+
+      expect(rdp.connections, isEmpty);
+      expect(find.textContaining('agente de Windows'), findsOneWidget);
+      expect(find.textContaining('Buscando'), findsNothing);
     });
 
     testWidgets('sin respuesta no ofrece escritorio remoto', (tester) async {

@@ -1,4 +1,5 @@
 import 'package:altair_wake/features/remote_desktop/data/rdp_client.dart';
+import 'package:altair_wake/features/remote_desktop/domain/monitor_layout.dart';
 import 'package:altair_wake/features/remote_desktop/domain/rdp_input.dart';
 import 'package:altair_wake/features/remote_desktop/presentation/rdp_session_screen.dart';
 import 'package:flutter/material.dart';
@@ -13,7 +14,7 @@ const _desktop = 1000;
 void main() {
   late FakeRdpClient client;
 
-  Future<void> openSession(WidgetTester tester) async {
+  Future<void> openSession(WidgetTester tester, {MonitorLayout? monitors}) async {
     tester.view
       ..physicalSize = const Size(800, 1200)
       ..devicePixelRatio = 1;
@@ -28,12 +29,18 @@ void main() {
           port: 3389,
           username: 'usuario',
           password: '',
+          monitors: monitors,
         ),
       ),
     );
     await tester.pump();
+    final size = monitors?.bounds;
     client.eventController
-      ..add(const RdpResized(_desktop, _desktop))
+      ..add(
+        size == null
+            ? const RdpResized(_desktop, _desktop)
+            : RdpResized(size.width.toInt(), size.height.toInt()),
+      )
       ..add(const RdpConnected());
     await tester.pump();
     await tester.pump();
@@ -119,6 +126,89 @@ void main() {
     await tester.dragFrom(desktopArea(tester).center, const Offset(80, 0));
     await tester.pump(const Duration(milliseconds: 600));
     expect(client.pointerEvents, isEmpty);
+  });
+
+  testWidgets('doble toque y mantener deja el clic izquierdo presionado', (tester) async {
+    await openSession(tester);
+    final center = desktopArea(tester).center;
+    await tester.tapAt(center);
+    await tester.pump(const Duration(milliseconds: 100));
+    client.pointerEvents.clear();
+
+    final gesture = await tester.startGesture(center);
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(flags(), [PointerFlags.move, PointerFlags.down | PointerFlags.leftButton]);
+
+    await gesture.up();
+    await tester.pump();
+    expect(flags().last, PointerFlags.leftButton);
+    expect(flags(), isNot(contains(PointerFlags.down | PointerFlags.rightButton)));
+  });
+
+  testWidgets('doble toque y deslizar arrastra con el botón izquierdo', (tester) async {
+    await openSession(tester);
+    final center = desktopArea(tester).center;
+    await tester.tapAt(center);
+    await tester.pump(const Duration(milliseconds: 100));
+    client.pointerEvents.clear();
+
+    await tester.dragFrom(center, const Offset(120, 0));
+    await tester.pump(const Duration(milliseconds: 50));
+
+    expect(flags().take(2), [PointerFlags.move, PointerFlags.down | PointerFlags.leftButton]);
+    expect(flags().last, PointerFlags.leftButton);
+    expect(client.pointerEvents.last.$1, greaterThan(_desktop ~/ 2));
+  });
+
+  testWidgets('dos toques separados en el tiempo son dos clics, sin arrastre', (tester) async {
+    await openSession(tester);
+    final center = desktopArea(tester).center;
+    final gesture = await tester.createGesture();
+    await gesture.down(center, timeStamp: Duration.zero);
+    await gesture.up(timeStamp: const Duration(milliseconds: 50));
+    await tester.pump(const Duration(seconds: 1));
+    await gesture.down(center, timeStamp: const Duration(seconds: 2));
+    await tester.pump(const Duration(milliseconds: 600));
+    await gesture.up(timeStamp: const Duration(seconds: 3));
+    await tester.pump();
+
+    // El segundo toque largo es clic derecho, no un arrastre.
+    expect(flags(), contains(PointerFlags.down | PointerFlags.rightButton));
+  });
+
+  group('varios monitores', () {
+    final layout = MonitorLayout.tryParse('1920x1080, 1920x1080')!;
+
+    SegmentedButton<int> selector(WidgetTester tester) =>
+        tester.widget<SegmentedButton<int>>(find.byType(SegmentedButton<int>));
+
+    testWidgets('empieza en el principal y cambia con los botones', (tester) async {
+      await openSession(tester, monitors: layout);
+      expect(selector(tester).selected, {0});
+      // Solo se ve un monitor: la textura (los dos) mide el doble del área.
+      final screenWidth = tester.getSize(find.byType(Texture)).width;
+
+      await tester.tap(find.text('Todos'));
+      await tester.pump();
+      expect(selector(tester).selected, {-1});
+      expect(tester.getSize(find.byType(Texture)).width, lessThan(screenWidth));
+
+      await tester.tap(find.text('2'));
+      await tester.pump();
+      expect(selector(tester).selected, {1});
+    });
+
+    testWidgets('el puntero pasa al monitor de al lado y la vista lo sigue', (tester) async {
+      await openSession(tester, monitors: layout);
+      final area = tester.getRect(find.byType(Scaffold));
+      await tester.dragFrom(area.center, Offset(area.width * 0.45, 0));
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.dragFrom(area.center, Offset(area.width * 0.45, 0));
+      await tester.pump(const Duration(milliseconds: 50));
+
+      expect(client.pointerEvents.last.$1, greaterThanOrEqualTo(1920));
+      expect(selector(tester).selected, {1});
+    });
   });
 
   testWidgets('el teclado del teléfono envía solo lo que cambia', (tester) async {

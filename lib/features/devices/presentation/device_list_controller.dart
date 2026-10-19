@@ -200,6 +200,9 @@ class DeviceListController extends ChangeNotifier {
         case AgentCommand.suspend:
         case AgentCommand.shutdown:
           await _followPowerDown(device, command);
+        case AgentCommand.remoteDesktop:
+          // No es una orden de energía: el túnel lo abre RemoteDesktopRouter.
+          break;
       }
     } on StorageException catch (error) {
       _message(error.message);

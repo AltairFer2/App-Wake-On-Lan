@@ -1,17 +1,59 @@
+import 'dart:io';
+
 import 'package:altair_agent_protocol/altair_agent_protocol.dart';
 
 import 'failure_rate_limiter.dart';
 import 'power_actions.dart';
 
+/// Abre la conexión con el Escritorio remoto del propio PC.
+typedef RemoteDesktopConnector = Future<Socket> Function();
+
+/// Puerto del Escritorio remoto de Windows en el propio PC.
+const int defaultRemoteDesktopPort = 3389;
+
+/// Conexión por el bucle local: no pasa por el firewall ni requiere que RDP
+/// acepte conexiones de fuera de la subred.
+RemoteDesktopConnector localRemoteDesktop([int port = defaultRemoteDesktopPort]) =>
+    () => Socket.connect(
+      InternetAddress.loopbackIPv4,
+      port,
+      timeout: const Duration(seconds: 5),
+    );
+
+/// Túnel autorizado: conexión RDP ya abierta y claves de la sesión.
+class AgentTunnel {
+  AgentTunnel(this.remoteDesktop, this.keys, this._release);
+
+  final Socket remoteDesktop;
+  final TunnelKeys keys;
+  final void Function() _release;
+  bool _released = false;
+
+  /// Libera el cupo de túneles. Idempotente.
+  void release() {
+    if (_released) return;
+    _released = true;
+    _release();
+  }
+}
+
 /// Resultado de procesar una línea: respuesta a enviar y, para la
 /// suspensión, una acción diferida que debe ejecutarse después de responder.
 class HandledRequest {
-  const HandledRequest({this.response, this.afterResponse, required this.logLine});
+  const HandledRequest({
+    this.response,
+    this.afterResponse,
+    this.tunnel,
+    required this.logLine,
+  });
 
   /// `null` si no debe responderse (origen bloqueado o petición sin firma
   /// válida): se cierra la conexión sin datos.
   final String? response;
   final Future<void> Function()? afterResponse;
+
+  /// Si no es `null`, la conexión sigue como túnel tras la respuesta.
+  final AgentTunnel? tunnel;
   final String logLine;
 }
 
@@ -19,15 +61,23 @@ class RequestHandler {
   RequestHandler({
     required this._key,
     required this._actions,
+    RemoteDesktopConnector? remoteDesktop,
     FailureRateLimiter? rateLimiter,
     ReplayGuard? replayGuard,
     DateTime Function()? clock,
-  }) : _rateLimiter = rateLimiter ?? FailureRateLimiter(),
+  }) : _remoteDesktop = remoteDesktop ?? localRemoteDesktop(),
+       _rateLimiter = rateLimiter ?? FailureRateLimiter(),
        _replayGuard = replayGuard ?? ReplayGuard(),
        _clock = clock ?? DateTime.now;
 
   final AgentKey _key;
   final PowerActions _actions;
+  final RemoteDesktopConnector _remoteDesktop;
+
+  /// Sesiones de escritorio remoto simultáneas permitidas.
+  static const int maxTunnels = 2;
+  int _activeTunnels = 0;
+  int get activeTunnels => _activeTunnels;
   final FailureRateLimiter _rateLimiter;
   final ReplayGuard _replayGuard;
   final DateTime Function() _clock;
@@ -78,7 +128,38 @@ class RequestHandler {
         return _runNow(request, source, _actions.cancelShutdown);
       case AgentCommand.wakeDisplay:
         return _runNow(request, source, _actions.keepDisplayOn);
+      case AgentCommand.remoteDesktop:
+        return _openTunnel(request, source);
     }
+  }
+
+  Future<HandledRequest> _openTunnel(AgentRequest request, String source) async {
+    final command = request.command.wireName;
+    if (_activeTunnels >= maxTunnels) {
+      return HandledRequest(
+        response: _respond(request.nonce, ok: false, error: AgentErrorCode.failed),
+        logLine: '$source $command: rechazado, ya hay $_activeTunnels túneles',
+      );
+    }
+    final Socket connection;
+    try {
+      connection = await _remoteDesktop();
+    } on SocketException catch (error) {
+      return HandledRequest(
+        response: _respond(request.nonce, ok: false, error: AgentErrorCode.failed),
+        logLine: '$source $command: escritorio remoto no disponible (${error.message})',
+      );
+    }
+    _activeTunnels++;
+    return HandledRequest(
+      response: _respond(request.nonce, ok: true, result: tunnelResult),
+      tunnel: AgentTunnel(
+        connection,
+        TunnelKeys.derive(_key, request.nonce),
+        () => _activeTunnels--,
+      ),
+      logLine: '$source $command: túnel abierto',
+    );
   }
 
   Future<HandledRequest> _runNow(

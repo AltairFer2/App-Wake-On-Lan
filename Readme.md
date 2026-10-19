@@ -148,7 +148,7 @@ aun con una regla de firewall que lo permite, Windows no respondió con RST
 | Autenticación | HMAC-SHA256 con clave de 256 bits; marca de tiempo (±30 s) y nonce contra repeticiones |
 | Respuestas | Firmadas y vinculadas al nonce de la petición. Sin firma válida no se responde nada |
 | Abuso | 10 peticiones inválidas en 1 min bloquean el origen 5 min |
-| Órdenes | `status`, `suspend` (S3, eventos de activación habilitados), `shutdown` (30 s, cancelable), `cancel`, `display` (enciende la pantalla y evita la suspensión durante 10 min) |
+| Órdenes | `status`, `suspend` (S3, eventos de activación habilitados), `shutdown` (30 s, cancelable), `cancel`, `display` (enciende la pantalla y evita la suspensión durante 10 min), `rdp` (túnel al Escritorio remoto, ver abajo) |
 | Tras despertar por red | Windows deja la pantalla apagada y vuelve a dormir a los ~2 min si nadie lo usa. La app envía `display` al confirmar el encendido (y desde ⋮ → *Encender pantalla*). El agente usa `PowerSetRequest` con *DisplayRequired* + *SystemRequired* |
 | Clave en el PC | `C:\ProgramData\AltairWake\agent.key`, accesible solo por SYSTEM y Administradores |
 | Clave en el teléfono | `flutter_secure_storage` (Android Keystore); nunca en el JSON de equipos |
@@ -172,12 +172,14 @@ Las órdenes aparecen en el menú ⋮ de la tarjeta.
 |---|---|
 | PC | `agent/scripts/remote-desktop.ps1` activa RDP con NLA y las reglas integradas de firewall limitadas a `LocalSubnet` (`-Disable` lo revierte). Requiere iniciar sesión con contraseña, no con PIN. `-AllowBlankPassword` (no recomendado) permite cuentas sin contraseña por red; `-Disable` restaura el bloqueo |
 | App | Con *Puerto RDP* configurado y el equipo encendido, la tarjeta muestra **Escritorio**: abre una sesión RDP **integrada** (FreeRDP 3 compilado para Android, dibujado en una textura de Flutter). Si el teléfono no tiene las librerías nativas (otra arquitectura), recurre a Windows App (`rdp://…`) |
-| Control | Tres modos (menú de la barra superior). **Puntero** (por defecto, como un touchpad): un dedo mueve el puntero dibujado por la app y la vista lo sigue; tocar = clic donde está. **Toque directo**: el clic va bajo el dedo; arrastrar = arrastrar. **Mover la vista**: un dedo desplaza la vista y no envía nada. En los dos primeros: mantener = clic derecho; mantener y mover = arrastrar. Siempre: dos dedos = rueda; pellizcar = zoom |
+| Control | Tres modos (menú de la barra superior). **Puntero** (por defecto, como un touchpad): un dedo mueve el puntero dibujado por la app y la vista lo sigue; tocar = clic donde está. **Toque directo**: el clic va bajo el dedo; arrastrar = arrastrar. **Mover la vista**: un dedo desplaza la vista y no envía nada. En los dos primeros: mantener = clic derecho; mantener y mover = arrastrar; **doble toque y mantener** = el clic izquierdo queda presionado mientras el dedo siga en la pantalla (moviéndolo, arrastra). Siempre: dos dedos = rueda; pellizcar = zoom |
 | Pantalla | La sesión se abre en horizontal y a pantalla completa (deslizar desde el borde muestra las barras del sistema); el botón de girar cambia a vertical. Al salir se restaura la orientación |
 | Teclado | El teclado del teléfono funciona como en cualquier campo de texto (sugerencias, escritura deslizando): la app envía al PC solo lo que cambia (retrocesos por lo borrado y el texto nuevo). Barra inferior: Esc, Tab, Ctrl/Alt/Win (se aplican a la siguiente tecla), flechas, Supr, Inicio, Fin, RePág, AvPág. Estas teclas se envían con la marca de tecla extendida (`KBDEXT`); sin ella FreeRDP las traduce al teclado numérico |
-| Monitores | *Monitores del PC* en el equipo: **Auto** (pantalla del teléfono) o de 1 a 4 monitores con la resolución de cada uno (lista o *Otra…*), de izquierda a derecha y el principal primero. Con uno solo se fija esa resolución. Con varios, al conectar se elige usarlos todos o solo el principal; en la sesión, el menú de monitores encuadra cada uno |
+| Monitores | *Monitores del PC* en el equipo: **Auto** (pantalla del teléfono) o de 1 a 4 monitores con la resolución de cada uno (lista o *Otra…*), de izquierda a derecha y el principal primero. Con uno solo se fija esa resolución. Con varios, al conectar se elige usarlos todos o solo el principal. En la sesión se ve **un monitor a la vez** (empieza por el principal; lo demás se tapa) y los botones **1 · 2 · … · Todos** de la barra superior cambian de pantalla; en modo puntero, llevar el puntero al borde pasa al monitor vecino. El zoom y el desplazamiento no salen del monitor elegido |
 | Certificado | Se muestra la huella SHA-256 la primera vez y FreeRDP la recuerda; si cambia, la app avisa en rojo |
-| Alcance | Solo red local. RDP no se abre en el router ni se expone a Internet; el acceso desde fuera queda pendiente de una red privada (p. ej. Cloudflare Zero Trust) |
+| Fuera de casa | Si RDP no responde en la IPv4 local, la app pide un **túnel al agente** (IPv4 local y después IPv6, como las órdenes): el agente, tras verificar la petición firmada, conecta con RDP en `127.0.0.1:3389` y retransmite. El tráfico va en tramas con HMAC-SHA256 (clave por sentido derivada de la clave del agente y del nonce de la petición), así que nadie en la ruta puede inyectar ni secuestrar la conexión; el contenido ya va cifrado por el TLS de RDP. En el teléfono, el túnel corre en un isolate propio y escucha en `127.0.0.1` en un puerto fijo por equipo (40000–49999), solo para la primera conexión. Máximo 2 túneles a la vez en el agente |
+| Alcance | RDP sigue limitado a la red local en el firewall y no se abre en el router: desde fuera solo se llega a través del agente y con su clave. Requiere el agente actualizado en el PC (`install.ps1`) |
+| Prueba del túnel | `cd agent; dart run tool/tunnel_smoke_test.dart` levanta un agente temporal y comprueba que el Escritorio remoto del PC responde a través del túnel (negociación X.224), sin iniciar sesión |
 
 ## Seguridad
 
@@ -185,7 +187,10 @@ Las órdenes aparecen en el menú ⋮ de la tarjeta.
 - Por defecto el agente solo acepta conexiones de la subred local. Abrirlo a
   Internet es opcional y conviene limitarlo a un rango conocido (p. ej. la
   salida de WARP): sin la clave nadie puede dar órdenes, pero quien la
-  obtenga podría apagar el equipo desde fuera.
+  obtenga podría apagar el equipo y, con el túnel, abrir su escritorio
+  remoto desde fuera. Con una cuenta de Windows sin contraseña, la clave del
+  agente es la única barrera: conviene poner contraseña y quitar
+  `-AllowBlankPassword`.
 - La MAC no es una credencial. Un puerto UDP abierto para WoL permite que
   cualquiera que conozca la dirección encienda el equipo; no da acceso a él.
 - Copia de seguridad de Android desactivada para no subir MAC, IPs ni claves a

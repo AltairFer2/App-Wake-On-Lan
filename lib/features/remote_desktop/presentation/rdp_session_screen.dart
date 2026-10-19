@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart' show kDoubleTapSlop, kDoubleTapTimeout;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -64,6 +65,12 @@ class _RdpSessionScreenState extends State<RdpSessionScreen> {
   bool _certificateDialogOpen = false;
   RdpControlMode _mode = RdpControlMode.pointer;
   RdpViewport? _viewport;
+
+  late final List<Rect> _monitorRects = widget.monitors?.rects ?? const [];
+
+  /// Monitor que se muestra; `null` = todos. Con varios, empieza en el
+  /// principal: verlos todos a la vez en el teléfono los deja diminutos.
+  late int? _monitor = _monitorRects.length > 1 ? 0 : null;
 
   /// El escritorio es apaisado: horizontal por defecto, con botón para girar.
   bool _landscape = true;
@@ -134,7 +141,10 @@ class _RdpSessionScreenState extends State<RdpSessionScreen> {
     final size = _controller.desktopSize;
     if (size != null) {
       final desktop = Size(size.width.toDouble(), size.height.toDouble());
-      if (_viewport?.desktop != desktop) _viewport = RdpViewport(desktop);
+      if (_viewport?.desktop != desktop) {
+        _viewport = RdpViewport(desktop);
+        _applyMonitor();
+      }
     }
     final request = _controller.pendingCertificate;
     if (request != null && !_certificateDialogOpen) {
@@ -158,10 +168,26 @@ class _RdpSessionScreenState extends State<RdpSessionScreen> {
     if (mounted) Navigator.of(context).pop();
   }
 
-  void _showMonitor(Rect? area) {
+  void _selectMonitor(int? index) {
+    setState(() => _monitor = index);
+    _applyMonitor();
+  }
+
+  void _applyMonitor() {
     final viewport = _viewport;
+    final index = _monitor;
     if (viewport == null) return;
-    setState(() => area == null ? viewport.showAll() : viewport.focus(area));
+    if (index == null || index >= _monitorRects.length) {
+      viewport.showAll();
+      return;
+    }
+    final area = _monitorRects[index];
+    viewport.focus(area);
+    // Al elegir un monitor con los botones, el puntero aparece en él; el
+    // siguiente movimiento lo envía al PC con su posición absoluta.
+    if (!area.contains(_controller.cursor.value)) {
+      _controller.cursor.value = area.center;
+    }
   }
 
   @override
@@ -170,11 +196,16 @@ class _RdpSessionScreenState extends State<RdpSessionScreen> {
       listenable: _controller,
       builder: (context, _) {
         final connected = _controller.phase == RdpPhase.connected;
-        final monitorRects = widget.monitors?.rects ?? const <Rect>[];
         return Scaffold(
           backgroundColor: Colors.black,
           appBar: AppBar(
-            title: Text(widget.title),
+            title: connected && _monitorRects.length > 1
+                ? _MonitorSelector(
+                    count: _monitorRects.length,
+                    selected: _monitor,
+                    onSelected: _selectMonitor,
+                  )
+                : Text(widget.title),
             actions: [
               if (connected) ...[
                 PopupMenuButton<RdpControlMode>(
@@ -191,18 +222,6 @@ class _RdpSessionScreenState extends State<RdpSessionScreen> {
                       ),
                   ],
                 ),
-                if (monitorRects.length > 1)
-                  PopupMenuButton<int>(
-                    tooltip: 'Monitores',
-                    icon: const Icon(Icons.desktop_windows_outlined),
-                    onSelected: (index) =>
-                        _showMonitor(index < 0 ? null : monitorRects[index]),
-                    itemBuilder: (_) => [
-                      const PopupMenuItem(value: -1, child: Text('Todos')),
-                      for (var i = 0; i < monitorRects.length; i++)
-                        PopupMenuItem(value: i, child: Text('Monitor ${i + 1}')),
-                    ],
-                  ),
               ],
               IconButton(
                 tooltip: _landscape ? 'Ver en vertical' : 'Ver en horizontal',
@@ -246,8 +265,54 @@ class _RdpSessionScreenState extends State<RdpSessionScreen> {
         viewport: viewport,
         controller: _controller,
         mode: _mode,
+        monitors: _monitorRects,
+        onCursorMonitor: (index) {
+          if (_monitor != null && _monitor != index) _selectMonitor(index);
+        },
       ),
     };
+  }
+}
+
+/// Botones "1 · 2 · … · Todos" para elegir qué monitor del PC se ve.
+class _MonitorSelector extends StatelessWidget {
+  const _MonitorSelector({
+    required this.count,
+    required this.selected,
+    required this.onSelected,
+  });
+
+  final int count;
+  final int? selected;
+  final ValueChanged<int?> onSelected;
+
+  /// SegmentedButton no admite null como valor: -1 representa "Todos".
+  static const int _all = -1;
+
+  @override
+  Widget build(BuildContext context) {
+    return FittedBox(
+      fit: BoxFit.scaleDown,
+      alignment: AlignmentDirectional.centerStart,
+      child: SegmentedButton<int>(
+        segments: [
+          for (var index = 0; index < count; index++)
+            ButtonSegment(
+              value: index,
+              label: Text('${index + 1}'),
+              tooltip: index == 0 ? 'Monitor 1 (principal)' : 'Monitor ${index + 1}',
+            ),
+          const ButtonSegment(value: _all, label: Text('Todos')),
+        ],
+        selected: {selected ?? _all},
+        showSelectedIcon: false,
+        style: const ButtonStyle(visualDensity: VisualDensity.compact),
+        onSelectionChanged: (selection) {
+          final value = selection.single;
+          onSelected(value == _all ? null : value);
+        },
+      ),
+    );
   }
 }
 
@@ -259,6 +324,8 @@ class _RemoteDesktopView extends StatefulWidget {
     required this.viewport,
     required this.controller,
     required this.mode,
+    this.monitors = const [],
+    this.onCursorMonitor,
   });
 
   final int textureId;
@@ -266,11 +333,17 @@ class _RemoteDesktopView extends StatefulWidget {
   final RdpSessionController controller;
   final RdpControlMode mode;
 
+  /// Rectángulo de cada monitor en el escritorio (vacío si es uno solo).
+  final List<Rect> monitors;
+
+  /// El puntero entró en otro monitor (índice en [monitors]).
+  final ValueChanged<int>? onCursorMonitor;
+
   @override
   State<_RemoteDesktopView> createState() => _RemoteDesktopViewState();
 }
 
-enum _Gesture { none, move, drag, pan, twoFingers }
+enum _Gesture { none, move, drag, held, pan, twoFingers }
 
 class _RemoteDesktopViewState extends State<_RemoteDesktopView> {
   /// Desplazamiento de dos dedos (px) por cada paso de rueda.
@@ -285,69 +358,123 @@ class _RemoteDesktopViewState extends State<_RemoteDesktopView> {
   Offset _scrollRemainder = Offset.zero;
   Offset _lastDesktopPoint = Offset.zero;
 
-  /// Mantener pulsado: punto de partida y si ya se convirtió en arrastre.
+  /// Mantener pulsado: punto de partida y si el botón izquierdo está abajo.
   Offset _holdStart = Offset.zero;
   bool _holdDragging = false;
+
+  /// Doble toque y mantener: el último toque y si el dedo actual llegó a
+  /// tiempo para dejar el clic izquierdo presionado.
+  ({Duration time, Offset position})? _lastUp;
+  ({Duration time, Offset position})? _lastTap;
+  bool _holdArmed = false;
 
   RdpViewport get _viewport => widget.viewport;
   RdpSessionController get _remote => widget.controller;
   bool get _isPointer => widget.mode == RdpControlMode.pointer;
+  bool get _sendsInput => widget.mode != RdpControlMode.view;
 
   /// Punto del escritorio al que apunta un toque: el puntero en modo
-  /// touchpad, o lo que está bajo el dedo en toque directo.
+  /// touchpad, o lo que está bajo el dedo (sin salir del monitor visible) en
+  /// toque directo.
   Offset _target(Offset screenPoint) =>
-      _isPointer ? _remote.cursor.value : _viewport.toDesktop(screenPoint);
+      _isPointer ? _remote.cursor.value : _viewport.toVisibleDesktop(screenPoint);
 
   /// En modo touchpad el puntero recorre en pantalla lo mismo que el dedo.
   Offset _cursorAfter(Offset start, Offset screenDelta) =>
       _viewport.clampToDesktop(start + screenDelta / _viewport.scale);
 
+  /// Mueve el puntero. Si se muestra un solo monitor y el puntero pasa a
+  /// otro, la vista cambia a ese; con zoom, la vista lo sigue.
   void _moveCursor(Offset point) {
     _remote.moveTo(point);
-    if (_viewport.reveal(point)) setState(() {});
+    final focused = _viewport.focusArea;
+    if (focused != null && !focused.contains(point)) {
+      final index = widget.monitors.indexWhere((monitor) => monitor.contains(point));
+      if (index >= 0) {
+        widget.onCursorMonitor?.call(index);
+        return;
+      }
+    }
+    if (_viewport.zoomedIn && _viewport.reveal(point)) setState(() {});
+  }
+
+  void _onPointerDown(PointerDownEvent event) {
+    final tap = _lastTap;
+    _holdArmed =
+        _sendsInput &&
+        tap != null &&
+        event.timeStamp - tap.time <= kDoubleTapTimeout &&
+        (event.localPosition - tap.position).distance <= kDoubleTapSlop;
+  }
+
+  // Se registra antes que el toque (el árbitro de gestos decide al final).
+  void _onPointerUp(PointerUpEvent event) =>
+      _lastUp = (time: event.timeStamp, position: event.localPosition);
+
+  /// Deja el botón izquierdo presionado hasta levantar el dedo.
+  void _pressHeld(Offset point) {
+    HapticFeedback.mediumImpact();
+    _holdArmed = false;
+    _lastDesktopPoint = point;
+    _remote.pressLeft(point);
   }
 
   void _onTapUp(TapUpDetails details) {
-    if (widget.mode == RdpControlMode.view) return;
+    if (!_sendsInput) return;
+    // El segundo toque de un doble clic no arma un tercero.
+    _lastTap = _holdArmed ? null : _lastUp;
+    _holdArmed = false;
     _remote.click(_target(details.localPosition));
   }
 
   void _onLongPressStart(LongPressStartDetails details) {
-    if (widget.mode == RdpControlMode.view) return;
-    HapticFeedback.mediumImpact();
+    if (!_sendsInput) return;
     _holdStart = _target(details.localPosition);
-    _holdDragging = false;
+    _holdDragging = _holdArmed;
+    if (_holdArmed) {
+      _pressHeld(_holdStart);
+    } else {
+      HapticFeedback.mediumImpact();
+    }
   }
 
   void _onLongPressMoveUpdate(LongPressMoveUpdateDetails details) {
-    if (widget.mode == RdpControlMode.view) return;
+    if (!_sendsInput) return;
     if (!_holdDragging) {
       _holdDragging = true;
       _remote.pressLeft(_holdStart);
     }
     _lastDesktopPoint = _isPointer
         ? _cursorAfter(_holdStart, details.localOffsetFromOrigin)
-        : _viewport.toDesktop(details.localPosition);
+        : _viewport.toVisibleDesktop(details.localPosition);
     _moveCursor(_lastDesktopPoint);
   }
 
-  /// Sin moverse es clic derecho; tras moverse, suelta el arrastre.
+  /// Sin moverse es clic derecho; con el botón abajo, lo suelta.
   void _onLongPressEnd(LongPressEndDetails details) {
-    if (widget.mode == RdpControlMode.view) return;
+    if (!_sendsInput) return;
     if (_holdDragging) {
       _remote.releaseLeft(_lastDesktopPoint);
     } else {
       _remote.click(_holdStart, right: true);
     }
     _holdDragging = false;
+    _lastTap = null;
   }
 
   void _onScaleStart(ScaleStartDetails details) {
     _lastScale = 1;
     _zooming = false;
     _scrollRemainder = Offset.zero;
+    _lastTap = null;
     if (details.pointerCount >= 2) {
       _gesture = _Gesture.twoFingers;
+      _holdArmed = false;
+      return;
+    }
+    if (_holdArmed) {
+      _gesture = _Gesture.held;
+      _pressHeld(_target(details.localFocalPoint));
       return;
     }
     switch (widget.mode) {
@@ -355,7 +482,7 @@ class _RemoteDesktopViewState extends State<_RemoteDesktopView> {
         _gesture = _Gesture.move;
       case RdpControlMode.touch:
         _gesture = _Gesture.drag;
-        _lastDesktopPoint = _viewport.toDesktop(details.localFocalPoint);
+        _lastDesktopPoint = _viewport.toVisibleDesktop(details.localFocalPoint);
         _remote.pressLeft(_lastDesktopPoint);
       case RdpControlMode.view:
         _gesture = _Gesture.pan;
@@ -367,8 +494,13 @@ class _RemoteDesktopViewState extends State<_RemoteDesktopView> {
       case _Gesture.move:
         _moveCursor(_cursorAfter(_remote.cursor.value, details.focalPointDelta));
       case _Gesture.drag:
-        _lastDesktopPoint = _viewport.toDesktop(details.localFocalPoint);
+        _lastDesktopPoint = _viewport.toVisibleDesktop(details.localFocalPoint);
         _remote.moveTo(_lastDesktopPoint);
+      case _Gesture.held:
+        _lastDesktopPoint = _isPointer
+            ? _cursorAfter(_lastDesktopPoint, details.focalPointDelta)
+            : _viewport.toVisibleDesktop(details.localFocalPoint);
+        _moveCursor(_lastDesktopPoint);
       case _Gesture.pan:
         setState(() => _viewport.panBy(details.focalPointDelta));
       case _Gesture.twoFingers:
@@ -389,7 +521,9 @@ class _RemoteDesktopViewState extends State<_RemoteDesktopView> {
   }
 
   void _onScaleEnd(ScaleEndDetails details) {
-    if (_gesture == _Gesture.drag) _remote.releaseLeft(_lastDesktopPoint);
+    if (_gesture == _Gesture.drag || _gesture == _Gesture.held) {
+      _remote.releaseLeft(_lastDesktopPoint);
+    }
     _gesture = _Gesture.none;
   }
 
@@ -416,46 +550,79 @@ class _RemoteDesktopViewState extends State<_RemoteDesktopView> {
       builder: (context, constraints) {
         _viewport.resize(constraints.biggest);
         final desktop = _viewport.desktop;
-        return GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTapUp: _onTapUp,
-          onLongPressStart: _onLongPressStart,
-          onLongPressMoveUpdate: _onLongPressMoveUpdate,
-          onLongPressEnd: _onLongPressEnd,
-          onScaleStart: _onScaleStart,
-          onScaleUpdate: _onScaleUpdate,
-          onScaleEnd: _onScaleEnd,
-          child: ClipRect(
-            child: Stack(
-              children: [
-                Positioned(
-                  left: _viewport.origin.dx,
-                  top: _viewport.origin.dy,
-                  width: desktop.width * _viewport.scale,
-                  height: desktop.height * _viewport.scale,
-                  child: Texture(
-                    textureId: widget.textureId,
-                    filterQuality: FilterQuality.medium,
+        final focused = _viewport.focusArea;
+        return Listener(
+          onPointerDown: _onPointerDown,
+          onPointerUp: _onPointerUp,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTapUp: _onTapUp,
+            onLongPressStart: _onLongPressStart,
+            onLongPressMoveUpdate: _onLongPressMoveUpdate,
+            onLongPressEnd: _onLongPressEnd,
+            onScaleStart: _onScaleStart,
+            onScaleUpdate: _onScaleUpdate,
+            onScaleEnd: _onScaleEnd,
+            child: ClipRect(
+              child: Stack(
+                children: [
+                  Positioned(
+                    left: _viewport.origin.dx,
+                    top: _viewport.origin.dy,
+                    width: desktop.width * _viewport.scale,
+                    height: desktop.height * _viewport.scale,
+                    child: Texture(
+                      textureId: widget.textureId,
+                      filterQuality: FilterQuality.medium,
+                    ),
                   ),
-                ),
-                ValueListenableBuilder<Offset>(
-                  valueListenable: _remote.cursor,
-                  builder: (context, cursor, _) {
-                    final tip = _viewport.toScreen(cursor);
-                    return Positioned(
-                      left: tip.dx,
-                      top: tip.dy,
-                      child: const IgnorePointer(child: _CursorArrow()),
-                    );
-                  },
-                ),
-              ],
+                  if (focused != null)
+                    Positioned.fill(
+                      child: IgnorePointer(
+                        child: CustomPaint(
+                          painter: _OutsideMaskPainter(_viewport.toScreenRect(focused)),
+                        ),
+                      ),
+                    ),
+                  ValueListenableBuilder<Offset>(
+                    valueListenable: _remote.cursor,
+                    builder: (context, cursor, _) {
+                      final tip = _viewport.toScreen(cursor);
+                      return Positioned(
+                        left: tip.dx,
+                        top: tip.dy,
+                        child: const IgnorePointer(child: _CursorArrow()),
+                      );
+                    },
+                  ),
+                ],
+              ),
             ),
           ),
         );
       },
     );
   }
+}
+
+/// Tapa de negro todo lo que no es el monitor elegido, para no ver trozos
+/// de los monitores vecinos a los lados.
+class _OutsideMaskPainter extends CustomPainter {
+  const _OutsideMaskPainter(this.visible);
+
+  final Rect visible;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final mask = Path()
+      ..fillType = PathFillType.evenOdd
+      ..addRect(Offset.zero & size)
+      ..addRect(visible);
+    canvas.drawPath(mask, Paint()..color = Colors.black);
+  }
+
+  @override
+  bool shouldRepaint(_OutsideMaskPainter oldDelegate) => oldDelegate.visible != visible;
 }
 
 /// Flecha de ratón con la punta en la esquina superior izquierda. La dibuja
