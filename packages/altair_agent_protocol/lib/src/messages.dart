@@ -12,6 +12,10 @@ const int defaultAgentPort = 47123;
 /// Tamaño máximo de una línea del protocolo, en bytes.
 const int maxMessageBytes = 4096;
 
+/// Tiempo que el agente mantiene la pantalla encendida tras la orden
+/// [AgentCommand.wakeDisplay]: margen para conectarse por escritorio remoto.
+const Duration displayHoldDuration = Duration(minutes: 10);
+
 /// Desfase máximo de reloj aceptado entre teléfono y PC.
 const Duration maxClockSkew = Duration(seconds: 30);
 
@@ -19,7 +23,12 @@ enum AgentCommand {
   status('status'),
   suspend('suspend'),
   shutdown('shutdown'),
-  cancelShutdown('cancel');
+  cancelShutdown('cancel'),
+
+  /// Enciende la pantalla y mantiene el equipo despierto un tiempo. Tras un
+  /// despertar por red, Windows deja la pantalla apagada y vuelve a dormirse
+  /// a los 2 min si nadie lo usa.
+  wakeDisplay('display');
 
   const AgentCommand(this.wireName);
 

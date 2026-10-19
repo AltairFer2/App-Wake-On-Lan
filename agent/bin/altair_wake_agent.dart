@@ -37,7 +37,7 @@ Future<void> main(List<String> arguments) async {
   }
 
   final server = AgentServer(
-    handler: RequestHandler(key: key, actions: const WindowsPowerActions()),
+    handler: RequestHandler(key: key, actions: WindowsPowerActions()),
     logger: logger,
     port: port,
   );

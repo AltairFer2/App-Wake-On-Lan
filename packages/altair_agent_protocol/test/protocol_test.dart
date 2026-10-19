@@ -54,6 +54,15 @@ void main() {
       expect(decoded.nonce, request.nonce);
     });
 
+    test('todas las órdenes tienen nombre de cable único y reversible', () {
+      final names = AgentCommand.values.map((c) => c.wireName).toSet();
+      expect(names, hasLength(AgentCommand.values.length));
+      for (final command in AgentCommand.values) {
+        expect(AgentCommand.fromWire(command.wireName), command);
+      }
+      expect(AgentCommand.fromWire('display'), AgentCommand.wakeDisplay);
+    });
+
     test('una clave distinta es no autorizada', () {
       final line = AgentRequest.create(AgentCommand.status, now)
           .encode(AgentKey.generate());

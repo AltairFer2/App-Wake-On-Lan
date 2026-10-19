@@ -4,6 +4,9 @@ import 'package:flutter/material.dart';
 import '../../../core/network/mac_address.dart';
 import '../../../core/network/network_validators.dart';
 import '../../../core/storage/id_generator.dart';
+import '../../remote_desktop/domain/monitor_layout.dart';
+import '../../remote_desktop/domain/remote_desktop.dart';
+import '../../remote_desktop/presentation/monitor_layout_field.dart';
 import '../domain/device.dart';
 
 /// Resultado del formulario. [newAgentKey] es `null` si no se ingresó una
@@ -48,6 +51,8 @@ class _DeviceFormScreenState extends State<DeviceFormScreen> {
   late final TextEditingController _remotePort;
   late final TextEditingController _agentPort;
   late final TextEditingController _agentKey;
+  late final TextEditingController _remoteDesktopPort;
+  late MonitorLayout? _remoteDesktopMonitors;
   late RemoteAccessMode _remoteMode;
 
   bool get _isEditing => widget.initial != null;
@@ -76,6 +81,10 @@ class _DeviceFormScreenState extends State<DeviceFormScreen> {
     _remoteMode = d?.remoteMode ?? RemoteAccessMode.none;
     _agentPort = TextEditingController(text: d?.agentPort?.toString());
     _agentKey = TextEditingController();
+    _remoteDesktopPort = TextEditingController(
+      text: d?.remoteDesktopPort?.toString(),
+    );
+    _remoteDesktopMonitors = MonitorLayout.tryParse(d?.remoteDesktopMonitors);
   }
 
   @override
@@ -92,6 +101,7 @@ class _DeviceFormScreenState extends State<DeviceFormScreen> {
       _remotePort,
       _agentPort,
       _agentKey,
+      _remoteDesktopPort,
     ]) {
       controller.dispose();
     }
@@ -118,6 +128,8 @@ class _DeviceFormScreenState extends State<DeviceFormScreen> {
       remotePort: int.parse(_remotePort.text.trim()),
       probePort: int.tryParse(_probePort.text.trim()),
       agentPort: int.tryParse(_agentPort.text.trim()),
+      remoteDesktopPort: int.tryParse(_remoteDesktopPort.text.trim()),
+      remoteDesktopMonitors: _remoteDesktopMonitors?.format(),
       lastAttempt: initial?.lastAttempt,
     );
     final keyText = _agentKey.text.trim();
@@ -342,6 +354,28 @@ class _DeviceFormScreenState extends State<DeviceFormScreen> {
         autocorrect: false,
         enableSuggestions: false,
         validator: _validateAgentKey,
+      ),
+      const _SectionTitle('Escritorio remoto (opcional)'),
+      const Text(
+        'Muestra el botón "Escritorio" cuando el equipo está encendido y abre '
+        'el escritorio remoto en la app, hacia su IPv4 local. Solo funciona '
+        'en la red de casa.',
+      ),
+      gap,
+      TextFormField(
+        controller: _remoteDesktopPort,
+        decoration: const InputDecoration(
+          labelText: 'Puerto RDP',
+          hintText: '$defaultRemoteDesktopPort',
+          helperText: 'Vacío oculta el escritorio remoto.',
+        ),
+        keyboardType: TextInputType.number,
+        validator: (v) => PortValidator.validate(v, required: false),
+      ),
+      gap,
+      MonitorLayoutField(
+        initial: _remoteDesktopMonitors,
+        onChanged: (layout) => _remoteDesktopMonitors = layout,
       ),
       const SizedBox(height: 24),
       FilledButton(onPressed: _submit, child: const Text('Guardar')),

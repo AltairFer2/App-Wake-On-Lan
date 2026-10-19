@@ -2,6 +2,7 @@ import 'dart:ffi';
 
 import 'package:ffi/ffi.dart';
 
+import 'kernel32.dart';
 import 'power_actions.dart';
 
 const int _tokenAdjustPrivileges = 0x0020;
@@ -27,14 +28,9 @@ final class _TokenPrivileges extends Struct {
   external int attributes;
 }
 
-final DynamicLibrary _kernel32 = DynamicLibrary.open('kernel32.dll');
 final DynamicLibrary _advapi32 = DynamicLibrary.open('advapi32.dll');
 final DynamicLibrary _powrprof = DynamicLibrary.open('powrprof.dll');
 
-final _getCurrentProcess = _kernel32
-    .lookupFunction<IntPtr Function(), int Function()>('GetCurrentProcess');
-final _closeHandle = _kernel32
-    .lookupFunction<Int32 Function(IntPtr), int Function(int)>('CloseHandle');
 final _openProcessToken = _advapi32.lookupFunction<
     Int32 Function(IntPtr, Uint32, Pointer<IntPtr>),
     int Function(int, int, Pointer<IntPtr>)>('OpenProcessToken');
@@ -83,7 +79,7 @@ void _enableShutdownPrivilege() {
   using((arena) {
     final token = arena<IntPtr>();
     if (_openProcessToken(
-          _getCurrentProcess(),
+          getCurrentProcess(),
           _tokenAdjustPrivileges | _tokenQuery,
           token,
         ) ==
@@ -115,7 +111,7 @@ void _enableShutdownPrivilege() {
         throw const PowerActionException('AdjustTokenPrivileges falló.');
       }
     } finally {
-      _closeHandle(token.value);
+      closeHandle(token.value);
     }
   });
 }

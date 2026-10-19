@@ -76,6 +76,8 @@ class RequestHandler {
         return _runNow(request, source, _actions.scheduleShutdown);
       case AgentCommand.cancelShutdown:
         return _runNow(request, source, _actions.cancelShutdown);
+      case AgentCommand.wakeDisplay:
+        return _runNow(request, source, _actions.keepDisplayOn);
     }
   }
 

@@ -6,7 +6,7 @@ import '../../../core/security/agent_key_store.dart';
 import '../../devices/domain/device.dart';
 import '../data/agent_client.dart';
 
-/// Envía órdenes al agente de un dispositivo por la red local.
+/// Envía órdenes al agente de un dispositivo, en la red local o por IPv6.
 class PowerControlService {
   const PowerControlService({
     required this._client,
@@ -16,14 +16,17 @@ class PowerControlService {
   final AgentClient _client;
   final AgentKeyStore _keyStore;
 
+  /// Prueba las direcciones en orden y pasa a la siguiente solo si no hubo
+  /// conexión: si la orden llegó, repetirla podría ejecutarla dos veces.
+  ///
   /// Lanza `StorageException` si la clave guardada no puede leerse.
   Future<AgentCallResult> run(Device device, AgentCommand command) async {
     final port = device.agentPort;
-    final address = agentAddressOf(device);
-    if (port == null || address == null) {
+    final addresses = agentAddressesOf(device);
+    if (port == null || addresses.isEmpty) {
       return const AgentCallResult(
         AgentCallOutcome.unreachable,
-        'El equipo no tiene agente configurado (requiere puerto e IP local).',
+        'El equipo no tiene agente configurado (requiere puerto y una IP).',
       );
     }
     final key = await _keyStore.read(device.id);
@@ -33,15 +36,18 @@ class PowerControlService {
         'No hay clave del agente guardada para este equipo.',
       );
     }
-    return _client.send(address, port, key, command);
+    late AgentCallResult result;
+    for (final address in addresses) {
+      result = await _client.send(address, port, key, command);
+      if (result.outcome != AgentCallOutcome.unreachable) break;
+    }
+    return result;
   }
 
-  /// IPv4 local si existe; si no, la IPv6 del equipo.
-  static InternetAddress? agentAddressOf(Device device) {
-    for (final raw in [device.localIpv4, device.ipv6Address]) {
-      final address = raw == null ? null : InternetAddress.tryParse(raw.trim());
-      if (address != null) return address;
-    }
-    return null;
-  }
+  /// IPv4 local primero (en casa) y después la IPv6 global (desde fuera).
+  static List<InternetAddress> agentAddressesOf(Device device) => [
+    for (final raw in [device.localIpv4, device.ipv6Address])
+      if (raw != null && InternetAddress.tryParse(raw.trim()) != null)
+        InternetAddress(raw.trim()),
+  ];
 }

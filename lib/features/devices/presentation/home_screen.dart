@@ -3,9 +3,16 @@ import 'dart:async';
 import 'package:altair_agent_protocol/altair_agent_protocol.dart';
 import 'package:flutter/material.dart';
 
+import '../../../app/branding.dart';
 import '../../../app/dependencies.dart';
 import '../../../core/errors/storage_exception.dart';
 import '../../diagnostics/presentation/diagnostics_screen.dart';
+import '../../remote_desktop/data/rdp_client.dart';
+import '../../remote_desktop/data/remote_desktop_launcher.dart';
+import '../../remote_desktop/domain/monitor_layout.dart';
+import '../../remote_desktop/domain/remote_desktop.dart';
+import '../../remote_desktop/presentation/rdp_credentials_dialog.dart';
+import '../../remote_desktop/presentation/rdp_session_screen.dart';
 import '../domain/device.dart';
 import 'device_card.dart';
 import 'device_form_screen.dart';
@@ -153,6 +160,60 @@ class _HomeScreenState extends State<HomeScreen> {
     await _controller.sendPowerCommand(device, command);
   }
 
+  Future<void> _openRemoteDesktop(Device device) async {
+    final host = remoteDesktopHostOf(device);
+    final port = device.remoteDesktopPort;
+    if (host == null || port == null) return;
+    final rdpClient = widget.dependencies.rdpClient;
+    if (await rdpClient.isSupported()) {
+      await _openIntegratedRemoteDesktop(device, host, port, rdpClient);
+      return;
+    }
+    final launch = await widget.dependencies.remoteDesktop.open(host, port);
+    final message = switch (launch) {
+      RemoteDesktopLaunch.connection => null,
+      RemoteDesktopLaunch.clientApp =>
+        'Se abrió Windows App. Si el equipo no está guardado, agrégalo con '
+            '$host${port == defaultRemoteDesktopPort ? '' : ':$port'}.',
+      RemoteDesktopLaunch.store =>
+        'Instala "Windows App" de Microsoft para conectarte al escritorio.',
+      RemoteDesktopLaunch.unavailable =>
+        'No se pudo abrir un cliente de escritorio remoto.',
+    };
+    if (message != null) _showMessage(message);
+  }
+
+  Future<void> _openIntegratedRemoteDesktop(
+    Device device,
+    String host,
+    int port,
+    RdpClient client,
+  ) async {
+    if (!mounted) return;
+    final monitors = MonitorLayout.tryParse(device.remoteDesktopMonitors);
+    final credentials = await showDialog<RdpCredentials>(
+      context: context,
+      builder: (_) => RdpCredentialsDialog(
+        deviceName: device.name,
+        monitorCount: monitors?.monitors.length ?? 1,
+      ),
+    );
+    if (credentials == null || !mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => RdpSessionScreen(
+          client: client,
+          title: device.name,
+          host: host,
+          port: port,
+          username: credentials.username,
+          password: credentials.password,
+          monitors: credentials.allMonitors ? monitors : monitors?.primaryOnly,
+        ),
+      ),
+    );
+  }
+
   void _openDiagnostics([Device? device]) {
     Navigator.of(context).push(
       MaterialPageRoute(
@@ -206,12 +267,16 @@ class _HomeScreenState extends State<HomeScreen> {
         _confirmDelete(device);
       case DeviceAction.agentStatus:
         _sendPowerCommand(device, AgentCommand.status);
+      case DeviceAction.wakeDisplay:
+        _sendPowerCommand(device, AgentCommand.wakeDisplay);
       case DeviceAction.suspend:
         _sendPowerCommand(device, AgentCommand.suspend);
       case DeviceAction.shutdown:
         _sendPowerCommand(device, AgentCommand.shutdown);
       case DeviceAction.cancelShutdown:
         _sendPowerCommand(device, AgentCommand.cancelShutdown);
+      case DeviceAction.remoteDesktop:
+        _openRemoteDesktop(device);
     }
   }
 
@@ -219,7 +284,23 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Altair Wake'),
+        title: Row(
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: Image.asset(
+                appIconAsset,
+                width: 32,
+                height: 32,
+                semanticLabel: 'Logotipo de $appDisplayName',
+              ),
+            ),
+            const SizedBox(width: 12),
+            const Flexible(
+              child: Text(appDisplayName, overflow: TextOverflow.ellipsis),
+            ),
+          ],
+        ),
         actions: [
           IconButton(
             tooltip: 'Diagnóstico de red',

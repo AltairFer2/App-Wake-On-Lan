@@ -1,5 +1,8 @@
 import 'dart:io';
 
+import 'package:altair_agent_protocol/altair_agent_protocol.dart';
+
+import 'windows_display.dart';
 import 'windows_suspend.dart';
 
 /// Falla al ejecutar una acción de energía.
@@ -20,15 +23,29 @@ abstract interface class PowerActions {
 
   /// Suspende a S3. Retorna cuando el equipo despierta.
   Future<void> suspend();
+
+  /// Enciende la pantalla y mantiene el equipo despierto durante un plazo,
+  /// para poder conectarse por escritorio remoto tras un despertar por red.
+  Future<void> keepDisplayOn();
 }
 
 class WindowsPowerActions implements PowerActions {
-  const WindowsPowerActions({this.shutdownGrace = const Duration(seconds: 30)});
+  WindowsPowerActions({
+    this.shutdownGrace = const Duration(seconds: 30),
+    this.displayHold = displayHoldDuration,
+  });
 
   final Duration shutdownGrace;
 
+  /// Tiempo para conectarse; después rigen los temporizadores de Windows.
+  final Duration displayHold;
+
+  final DisplayKeepAlive _display = DisplayKeepAlive();
+
   @override
-  Future<void> scheduleShutdown() => _runShutdownExe([
+  Future<void> scheduleShutdown() async {
+    _display.release();
+    await _runShutdownExe([
     '/s',
     '/t',
     '${shutdownGrace.inSeconds}',
@@ -36,13 +53,20 @@ class WindowsPowerActions implements PowerActions {
     'p:0:0',
     '/c',
     'Apagado solicitado desde Altair Wake. Cancelar: shutdown /a',
-  ]);
+    ]);
+  }
 
   @override
   Future<void> cancelShutdown() => _runShutdownExe(['/a']);
 
   @override
-  Future<void> suspend() async => suspendToRam();
+  Future<void> suspend() async {
+    _display.release();
+    suspendToRam();
+  }
+
+  @override
+  Future<void> keepDisplayOn() async => _display.hold(displayHold);
 
   Future<void> _runShutdownExe(List<String> arguments) async {
     final result = await Process.run('shutdown.exe', arguments);

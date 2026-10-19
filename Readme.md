@@ -1,9 +1,13 @@
-# Altair Wake
+# Lazy Wake Up
 
 Aplicación Flutter (Android) para encender computadoras mediante Wake-on-LAN
 en la red local y, cuando la red lo permite, desde Internet. Un agente
 opcional para Windows permite además consultar el estado, suspender y apagar
-el equipo desde la red local.
+el equipo, y la app abre el escritorio remoto de los equipos encendidos.
+
+El proyecto se llamó antes "Altair Wake": el identificador del paquete
+(`com.altair.altair_wake`), el agente y sus tareas, carpetas y reglas de
+firewall conservan ese nombre para no romper instalaciones existentes.
 
 La aplicación distingue entre **paquete enviado** y **encendido confirmado**:
 solo marca un equipo como encendido si responde a un sondeo TCP posterior al
@@ -28,6 +32,9 @@ packages/altair_agent_protocol/  protocolo compartido app ↔ agente (Dart puro)
 agent/                        agente de Windows (Dart, compilado a .exe)
   scripts/install.ps1         instalación (administrador)
   scripts/uninstall.ps1       desinstalación (administrador)
+  scripts/remote-desktop.ps1  activa RDP solo para la red local (administrador)
+assets/branding/              logotipo original e icono para la app
+tool/generate_launcher_icons.py  genera los iconos de Android desde el logotipo
 docs/                         viabilidad y protocolo de pruebas físicas
 ```
 
@@ -50,10 +57,28 @@ flutter test
 flutter build apk --release        # build/app/outputs/flutter-apk/app-release.apk
 flutter install                    # con el teléfono conectado por USB
 
+python tool/generate_launcher_icons.py   # tras cambiar assets/branding/lazy_wake_up_logo.png (requiere Pillow)
+
 (cd packages/altair_agent_protocol && dart test)
 (cd agent && dart test)
 dart compile exe agent/bin/altair_wake_agent.dart -o build/agent/altair_wake_agent.exe
 ```
+
+### Librerías nativas del escritorio remoto (FreeRDP)
+
+`android/app/src/main/jniLibs/` no está en git: se genera con
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tool/native/build_freerdp_android.ps1
+```
+
+El script descarga con versión fija y verifica (SHA-256 o etiqueta git) MSYS2,
+OpenSSL 3.5 (LTS) y FreeRDP 3.32 en `D:\Desarrollo\lwu-native` (ruta sin
+espacios), compila para `arm64-v8a` (API 24, páginas de 16 KB) y copia las
+`.so`. Requiere el NDK 28.2 y CMake 3.22.1 del SDK de Android. Sin esas
+librerías la app compila igual y el botón **Escritorio** usa Windows App.
+La clase puente `com.freerdp.freerdpcore.services.LibFreeRDP` debe conservar
+paquete y firmas (contrato JNI); `proguard-rules.pro` evita que R8 la renombre.
 
 ### Problemas conocidos del entorno Windows
 
@@ -118,11 +143,13 @@ aun con una regla de firewall que lo permite, Windows no respondió con RST
 | Aspecto | Implementación |
 |---|---|
 | Ejecución | Tarea programada `AltairWakeAgent`, cuenta SYSTEM, al iniciar Windows |
-| Red | TCP 47123 en IPv4 e IPv6; regla de firewall limitada a `LocalSubnet` y al ejecutable |
+| Red | TCP 47123 en IPv4 e IPv6; regla de firewall limitada al ejecutable y a `LocalSubnet`, más los rangos de `-RemoteAddress` si se indican |
+| Fuera de casa | La app prueba la IPv4 local y, si no conecta, la IPv6 del equipo. Una orden que llegó no se repite por la otra dirección. Requiere IPv6 en el teléfono (p. ej. Cloudflare WARP en datos móviles), `-RemoteAddress 2a09:bac0::/29` (salida IPv6 de WARP) y abrir TCP 47123 hacia el PC en el filtro IPv6 del router |
 | Autenticación | HMAC-SHA256 con clave de 256 bits; marca de tiempo (±30 s) y nonce contra repeticiones |
 | Respuestas | Firmadas y vinculadas al nonce de la petición. Sin firma válida no se responde nada |
 | Abuso | 10 peticiones inválidas en 1 min bloquean el origen 5 min |
-| Órdenes | `status`, `suspend` (S3, eventos de activación habilitados), `shutdown` (30 s, cancelable), `cancel` |
+| Órdenes | `status`, `suspend` (S3, eventos de activación habilitados), `shutdown` (30 s, cancelable), `cancel`, `display` (enciende la pantalla y evita la suspensión durante 10 min) |
+| Tras despertar por red | Windows deja la pantalla apagada y vuelve a dormir a los ~2 min si nadie lo usa. La app envía `display` al confirmar el encendido (y desde ⋮ → *Encender pantalla*). El agente usa `PowerSetRequest` con *DisplayRequired* + *SystemRequired* |
 | Clave en el PC | `C:\ProgramData\AltairWake\agent.key`, accesible solo por SYSTEM y Administradores |
 | Clave en el teléfono | `flutter_secure_storage` (Android Keystore); nunca en el JSON de equipos |
 | Registro | `C:\ProgramData\AltairWake\agent.log` (rotación a 1 MB), sin la clave |
@@ -132,17 +159,33 @@ Instalación (PowerShell como administrador, tras compilar el `.exe`):
 ```powershell
 .\agent\scripts\install.ps1 -ShowKey     # muestra la clave para pegarla en la app
 .\agent\scripts\install.ps1 -RotateKey   # genera una clave nueva
+.\agent\scripts\install.ps1 -RemoteAddress '2a09:bac0::/29'   # admite además órdenes vía WARP
 .\agent\scripts\uninstall.ps1            # elimina tarea, regla, programa y datos
 ```
 
 En la app: editar el equipo → *Agente de Windows* → puerto 47123 y la clave.
 Las órdenes aparecen en el menú ⋮ de la tarjeta.
 
+## Escritorio remoto
+
+| Aspecto | Implementación |
+|---|---|
+| PC | `agent/scripts/remote-desktop.ps1` activa RDP con NLA y las reglas integradas de firewall limitadas a `LocalSubnet` (`-Disable` lo revierte). Requiere iniciar sesión con contraseña, no con PIN. `-AllowBlankPassword` (no recomendado) permite cuentas sin contraseña por red; `-Disable` restaura el bloqueo |
+| App | Con *Puerto RDP* configurado y el equipo encendido, la tarjeta muestra **Escritorio**: abre una sesión RDP **integrada** (FreeRDP 3 compilado para Android, dibujado en una textura de Flutter). Si el teléfono no tiene las librerías nativas (otra arquitectura), recurre a Windows App (`rdp://…`) |
+| Control | Tres modos (menú de la barra superior). **Puntero** (por defecto, como un touchpad): un dedo mueve el puntero dibujado por la app y la vista lo sigue; tocar = clic donde está. **Toque directo**: el clic va bajo el dedo; arrastrar = arrastrar. **Mover la vista**: un dedo desplaza la vista y no envía nada. En los dos primeros: mantener = clic derecho; mantener y mover = arrastrar. Siempre: dos dedos = rueda; pellizcar = zoom |
+| Pantalla | La sesión se abre en horizontal y a pantalla completa (deslizar desde el borde muestra las barras del sistema); el botón de girar cambia a vertical. Al salir se restaura la orientación |
+| Teclado | El teclado del teléfono funciona como en cualquier campo de texto (sugerencias, escritura deslizando): la app envía al PC solo lo que cambia (retrocesos por lo borrado y el texto nuevo). Barra inferior: Esc, Tab, Ctrl/Alt/Win (se aplican a la siguiente tecla), flechas, Supr, Inicio, Fin, RePág, AvPág. Estas teclas se envían con la marca de tecla extendida (`KBDEXT`); sin ella FreeRDP las traduce al teclado numérico |
+| Monitores | *Monitores del PC* en el equipo: **Auto** (pantalla del teléfono) o de 1 a 4 monitores con la resolución de cada uno (lista o *Otra…*), de izquierda a derecha y el principal primero. Con uno solo se fija esa resolución. Con varios, al conectar se elige usarlos todos o solo el principal; en la sesión, el menú de monitores encuadra cada uno |
+| Certificado | Se muestra la huella SHA-256 la primera vez y FreeRDP la recuerda; si cambia, la app avisa en rojo |
+| Alcance | Solo red local. RDP no se abre en el router ni se expone a Internet; el acceso desde fuera queda pendiente de una red privada (p. ej. Cloudflare Zero Trust) |
+
 ## Seguridad
 
 - No se expone RDP, no se usa DMZ ni UPnP, no se publica el panel del router.
-- El agente solo acepta conexiones de la subred local; no se recomienda
-  abrirlo a Internet.
+- Por defecto el agente solo acepta conexiones de la subred local. Abrirlo a
+  Internet es opcional y conviene limitarlo a un rango conocido (p. ej. la
+  salida de WARP): sin la clave nadie puede dar órdenes, pero quien la
+  obtenga podría apagar el equipo desde fuera.
 - La MAC no es una credencial. Un puerto UDP abierto para WoL permite que
   cualquiera que conozca la dirección encienda el equipo; no da acceso a él.
 - Copia de seguridad de Android desactivada para no subir MAC, IPs ni claves a

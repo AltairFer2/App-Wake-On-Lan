@@ -22,6 +22,9 @@ enum AgentCallOutcome {
 
   /// Sin conexión con el agente (equipo apagado, sin ruta o firewall).
   unreachable,
+
+  /// La orden se envió, pero la respuesta no llegó: pudo haberse ejecutado.
+  interrupted,
 }
 
 class AgentCallResult {
@@ -69,12 +72,12 @@ class AgentClient {
       return _interpret(reply.trim(), key, request);
     } on TimeoutException {
       return const AgentCallResult(
-        AgentCallOutcome.unreachable,
+        AgentCallOutcome.interrupted,
         'El agente no respondió a tiempo.',
       );
     } on SocketException catch (error) {
       return AgentCallResult(
-        AgentCallOutcome.unreachable,
+        AgentCallOutcome.interrupted,
         'Se perdió la conexión con el agente (${error.message}).',
       );
     } finally {
@@ -129,11 +132,10 @@ class AgentClient {
       SocketFailureKind.connectionRefused =>
         'El PC respondió, pero el agente no escucha en $target.',
       SocketFailureKind.networkUnreachable =>
-        'El teléfono no tiene ruta hacia $target. El agente solo acepta '
-            'órdenes desde la red local.',
+        'El teléfono no tiene ruta hacia $target.',
       _ =>
         'Sin respuesta de $target. El PC puede estar apagado o suspendido, '
-            'o el teléfono no está en la red local.',
+            'o el firewall bloquea la conexión.',
     };
   }
 }

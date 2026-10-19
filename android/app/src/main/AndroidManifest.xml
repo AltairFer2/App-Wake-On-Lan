@@ -3,7 +3,7 @@
     <uses-permission android:name="android.permission.INTERNET"/>
     <!-- allowBackup desactivado: evita copiar a la nube MAC e IPs de los equipos. -->
     <application
-        android:label="Altair Wake"
+        android:label="Lazy Wake Up"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:allowBackup="false"
@@ -47,5 +47,7 @@
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
         </intent>
+        <!-- Abrir Windows App (escritorio remoto) si no acepta enlaces rdp://. -->
+        <package android:name="com.microsoft.rdc.androidx"/>
     </queries>
 </manifest>

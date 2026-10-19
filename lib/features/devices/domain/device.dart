@@ -64,6 +64,8 @@ class Device {
     this.remotePort = defaultWakeOnLanPort,
     this.probePort,
     this.agentPort,
+    this.remoteDesktopPort,
+    this.remoteDesktopMonitors,
     this.lastAttempt,
   });
 
@@ -92,6 +94,14 @@ class Device {
   /// Puerto TCP del agente de Windows (estado, suspender, apagar). `null` si
   /// el equipo no tiene agente. La clave se guarda aparte, cifrada.
   final int? agentPort;
+
+  /// Puerto RDP del equipo (3389 por defecto en Windows). `null` oculta la
+  /// opción de escritorio remoto.
+  final int? remoteDesktopPort;
+
+  /// Resoluciones de los monitores del PC, de izquierda a derecha y con el
+  /// principal primero ("1920x1080, 1920x1080"). `null`: un solo monitor.
+  final String? remoteDesktopMonitors;
   final LastWakeAttempt? lastAttempt;
 
   /// Host al que se envía la ruta remota: [remoteHost] o, en modo IPv6 sin
@@ -120,6 +130,8 @@ class Device {
     remotePort: remotePort,
     probePort: probePort,
     agentPort: agentPort,
+    remoteDesktopPort: remoteDesktopPort,
+    remoteDesktopMonitors: remoteDesktopMonitors,
     lastAttempt: attempt,
   );
 
@@ -136,6 +148,8 @@ class Device {
     'remotePort': remotePort,
     'probePort': probePort,
     'agentPort': agentPort,
+    'remoteDesktopPort': remoteDesktopPort,
+    'remoteDesktopMonitors': remoteDesktopMonitors,
     'lastAttempt': lastAttempt?.toJson(),
   };
 
@@ -158,6 +172,9 @@ class Device {
       probePort: json['probePort'] as int?,
       // Opcional: ausente en datos guardados antes de existir el agente.
       agentPort: json['agentPort'] as int?,
+      // Opcional: ausente en datos guardados antes del escritorio remoto.
+      remoteDesktopPort: json['remoteDesktopPort'] as int?,
+      remoteDesktopMonitors: json['remoteDesktopMonitors'] as String?,
       lastAttempt: lastAttempt is Map<String, Object?>
           ? LastWakeAttempt.fromJson(lastAttempt)
           : null,
@@ -167,6 +184,7 @@ class Device {
       device.remotePort,
       ?device.probePort,
       ?device.agentPort,
+      ?device.remoteDesktopPort,
     ]) {
       if (!PortValidator.isValid(port)) {
         throw FormatException('Puerto fuera de rango en "${device.name}".', port);

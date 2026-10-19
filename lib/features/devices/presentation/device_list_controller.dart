@@ -192,6 +192,11 @@ class DeviceListController extends ChangeNotifier {
             ),
           );
           _message('Apagado cancelado.');
+        case AgentCommand.wakeDisplay:
+          _message(
+            'Pantalla de ${device.name} encendida por '
+            '${displayHoldDuration.inMinutes} min.',
+          );
         case AgentCommand.suspend:
         case AgentCommand.shutdown:
           await _followPowerDown(device, command);
@@ -292,6 +297,25 @@ class DeviceListController extends ChangeNotifier {
             : ReachabilityStatus.unverifiable,
       ),
     );
+    if (confirmed) await _wakeDisplayAfterRemoteWake(device);
+  }
+
+  /// Tras despertar por red, Windows deja la pantalla apagada y vuelve a
+  /// dormir a los 2 min si nadie lo usa; el agente lo evita para permitir el
+  /// escritorio remoto.
+  Future<void> _wakeDisplayAfterRemoteWake(Device device) async {
+    if (device.agentPort == null) return;
+    try {
+      final result = await _powerControl.run(device, AgentCommand.wakeDisplay);
+      _message(
+        result.isAccepted
+            ? '${device.name} encendido; pantalla activa por '
+              '${displayHoldDuration.inMinutes} min.'
+            : 'Encendido, pero no se pudo activar la pantalla: ${result.message}',
+      );
+    } on StorageException catch (error) {
+      _message('Encendido, pero no se pudo activar la pantalla: ${error.message}');
+    }
   }
 
   Future<void> _refreshOne(Device device) async {

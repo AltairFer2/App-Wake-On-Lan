@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Azul del borde del logotipo; asoma solo donde la máscara del launcher
+         supera las esquinas redondeadas del dibujo. -->
+    <color name="ic_launcher_background">#00287D</color>
+</resources>

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../../../app/theme.dart';
 import '../../../core/formatting/relative_time.dart';
 import '../../../core/network/reachability_probe.dart';
+import '../../remote_desktop/domain/remote_desktop.dart';
 import '../../wake_on_lan/domain/wake_confirmer.dart';
 import '../../wake_on_lan/domain/wake_report.dart';
 import '../domain/device.dart';
@@ -16,9 +17,11 @@ enum DeviceAction {
   diagnose,
   delete,
   agentStatus,
+  wakeDisplay,
   suspend,
   shutdown,
   cancelShutdown,
+  remoteDesktop,
 }
 
 class DeviceCard extends StatelessWidget {
@@ -79,6 +82,10 @@ class DeviceCard extends StatelessWidget {
                       PopupMenuItem(
                         value: DeviceAction.agentStatus,
                         child: Text('Consultar agente'),
+                      ),
+                      PopupMenuItem(
+                        value: DeviceAction.wakeDisplay,
+                        child: Text('Encender pantalla'),
                       ),
                       PopupMenuItem(
                         value: DeviceAction.suspend,
@@ -163,6 +170,7 @@ class DeviceCard extends StatelessWidget {
 /// - responde y tiene agente → Suspender / Apagar;
 /// - responde sin agente → "Encendido" (no hay forma de apagarlo);
 /// - sin respuesta o sin sondeo → Encender (no se afirma que esté apagado).
+/// Si responde y tiene escritorio remoto configurado, se añade "Escritorio".
 class _PrimaryActions extends StatelessWidget {
   const _PrimaryActions({
     required this.device,
@@ -181,6 +189,13 @@ class _PrimaryActions extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final isOn = runtime.connectivity == ReachabilityStatus.reachable;
     final hasAgent = device.agentPort != null;
+    final remoteDesktop = remoteDesktopHostOf(device) == null
+        ? null
+        : FilledButton.tonalIcon(
+            onPressed: () => onAction(DeviceAction.remoteDesktop),
+            icon: const Icon(Icons.desktop_windows_outlined),
+            label: const Text('Escritorio'),
+          );
     final Widget actions = switch (runtime.phase) {
       DevicePhase.poweringDown when runtime.powerCommand == AgentCommand.shutdown =>
         OutlinedButton.icon(
@@ -193,6 +208,7 @@ class _PrimaryActions extends StatelessWidget {
         runSpacing: 8,
         alignment: WrapAlignment.end,
         children: [
+          ?remoteDesktop,
           OutlinedButton.icon(
             onPressed: () => onAction(DeviceAction.suspend),
             icon: const Icon(Icons.bedtime_outlined),
@@ -209,10 +225,9 @@ class _PrimaryActions extends StatelessWidget {
           ),
         ],
       ),
-      DevicePhase.idle when isOn => const FilledButton.tonal(
-        onPressed: null,
-        child: Text('Encendido'),
-      ),
+      DevicePhase.idle when isOn =>
+        remoteDesktop ??
+            const FilledButton.tonal(onPressed: null, child: Text('Encendido')),
       DevicePhase.idle => FilledButton.icon(
         onPressed: onWake,
         icon: const Icon(Icons.power_settings_new),

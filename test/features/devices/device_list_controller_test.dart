@@ -78,6 +78,44 @@ void main() {
     );
   });
 
+  test('tras confirmar el encendido, pide al agente encender la pantalla', () async {
+    repository = InMemoryDeviceRepository([sampleDevice(agentPort: 47123)]);
+    probe.status = ReachabilityStatus.reachable;
+    final controller = buildController();
+    addTearDown(controller.dispose);
+    await controller.load();
+
+    await controller.wake(controller.devices.single);
+
+    expect(
+      repository.stored.single.lastAttempt!.status,
+      WakeAttemptStatus.confirmedAwake,
+    );
+    expect(power.commands, [AgentCommand.wakeDisplay]);
+  });
+
+  test('sin agente no se envía la orden de pantalla', () async {
+    probe.status = ReachabilityStatus.reachable;
+    final controller = buildController();
+    addTearDown(controller.dispose);
+    await controller.load();
+
+    await controller.wake(controller.devices.single);
+
+    expect(power.commands, isEmpty);
+  });
+
+  test('si el encendido no se confirma, no se pide la pantalla', () async {
+    repository = InMemoryDeviceRepository([sampleDevice(agentPort: 47123)]);
+    final controller = buildController();
+    addTearDown(controller.dispose);
+    await controller.load();
+
+    await controller.wake(controller.devices.single);
+
+    expect(power.commands, isEmpty);
+  });
+
   test('si ya respondía, el envío no se registra como encendido confirmado', () async {
     probe.status = ReachabilityStatus.reachable;
     final controller = buildController();

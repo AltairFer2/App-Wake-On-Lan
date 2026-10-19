@@ -20,6 +20,9 @@ class FakePowerActions implements PowerActions {
 
   @override
   Future<void> suspend() async => calls.add('suspend');
+
+  @override
+  Future<void> keepDisplayOn() async => calls.add('display');
 }
 
 void main() {
@@ -54,6 +57,14 @@ void main() {
       final handled = await handler.handle(request.encode(key), 'x');
       expect(actions.calls, ['shutdown']);
       expect(responseOf(handled, request).ok, isTrue);
+    });
+
+    test('display mantiene la pantalla antes de responder', () async {
+      final request = AgentRequest.create(AgentCommand.wakeDisplay, now);
+      final handled = await handler.handle(request.encode(key), 'x');
+      expect(actions.calls, ['display']);
+      expect(responseOf(handled, request).result, 'accepted');
+      expect(handled.afterResponse, isNull);
     });
 
     test('un fallo de shutdown.exe se informa como failed', () async {

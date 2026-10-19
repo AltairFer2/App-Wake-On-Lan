@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -13,6 +14,8 @@ import 'package:altair_wake/features/devices/data/device_repository.dart';
 import 'package:altair_wake/features/devices/domain/device.dart';
 import 'package:altair_wake/features/power_control/data/agent_client.dart';
 import 'package:altair_wake/features/power_control/domain/power_control_service.dart';
+import 'package:altair_wake/features/remote_desktop/data/rdp_client.dart';
+import 'package:altair_wake/features/remote_desktop/data/remote_desktop_launcher.dart';
 
 Device sampleDevice({
   String id = 'pc-1',
@@ -24,6 +27,8 @@ Device sampleDevice({
   String? remoteHost,
   int? probePort = 445,
   int? agentPort,
+  int? remoteDesktopPort,
+  String? remoteDesktopMonitors,
   LastWakeAttempt? lastAttempt,
 }) => Device(
   id: id,
@@ -36,6 +41,8 @@ Device sampleDevice({
   remoteHost: remoteHost,
   probePort: probePort,
   agentPort: agentPort,
+  remoteDesktopPort: remoteDesktopPort,
+  remoteDesktopMonitors: remoteDesktopMonitors,
   lastAttempt: lastAttempt,
 );
 
@@ -151,6 +158,64 @@ class FakePowerControl implements PowerControlService {
     commands.add(command);
     return AgentCallResult(outcome, 'resultado simulado: ${outcome.name}');
   }
+}
+
+class FakeRemoteDesktopLauncher implements RemoteDesktopLauncher {
+  FakeRemoteDesktopLauncher([this.launch = RemoteDesktopLaunch.connection]);
+
+  final RemoteDesktopLaunch launch;
+  final List<String> opened = [];
+
+  @override
+  Future<RemoteDesktopLaunch> open(String host, int port) async {
+    opened.add('$host:$port');
+    return launch;
+  }
+}
+
+class FakeRdpClient implements RdpClient {
+  FakeRdpClient({this.supported = true, this.connectError});
+
+  final bool supported;
+  final RdpException? connectError;
+  final StreamController<RdpEvent> eventController = StreamController.broadcast();
+  final List<RdpConnectionRequest> connections = [];
+  final List<(int, bool)> certificateAnswers = [];
+  int disconnects = 0;
+
+  @override
+  Future<bool> isSupported() async => supported;
+
+  @override
+  Stream<RdpEvent> get events => eventController.stream;
+
+  @override
+  Future<int> connect(RdpConnectionRequest request) async {
+    connections.add(request);
+    if (connectError case final error?) throw error;
+    return 7;
+  }
+
+  final List<(int, int, int)> pointerEvents = [];
+  final List<(int, bool)> keyEvents = [];
+  final List<String> texts = [];
+
+  @override
+  Future<void> sendPointer(int x, int y, int flags) async => pointerEvents.add((x, y, flags));
+
+  @override
+  Future<void> sendKey(int virtualKey, {required bool down}) async =>
+      keyEvents.add((virtualKey, down));
+
+  @override
+  Future<void> sendText(String text) async => texts.add(text);
+
+  @override
+  Future<void> answerCertificate(int requestId, {required bool accept}) async =>
+      certificateAnswers.add((requestId, accept));
+
+  @override
+  Future<void> disconnect() async => disconnects++;
 }
 
 SocketException socketError(int code, [String message = 'error']) =>

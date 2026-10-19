@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../features/devices/presentation/home_screen.dart';
+import 'branding.dart';
 import 'dependencies.dart';
 import 'theme.dart';
 
@@ -12,7 +13,7 @@ class AltairWakeApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Altair Wake',
+      title: appDisplayName,
       debugShowCheckedModeBanner: false,
       theme: buildDarkTheme(),
       home: HomeScreen(dependencies: dependencies),

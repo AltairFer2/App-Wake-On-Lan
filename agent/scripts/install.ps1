@@ -17,13 +17,19 @@
 .PARAMETER KeyOutFile
     Si se indica, escribe la clave en ese archivo para transferirla a la app.
     Bórralo después de usarlo.
+
+.PARAMETER RemoteAddress
+    Rangos adicionales a la subred local desde los que se aceptan órdenes, por
+    ejemplo la salida IPv6 de Cloudflare WARP (2a09:bac0::/29) para controlar
+    el equipo desde datos móviles. Requiere además abrir el puerto en el router.
 #>
 param(
     [string]$ExePath = (Join-Path $PSScriptRoot '..\..\build\agent\altair_wake_agent.exe'),
     [ValidateRange(1, 65535)][int]$Port = 47123,
     [switch]$RotateKey,
     [switch]$ShowKey,
-    [string]$KeyOutFile
+    [string]$KeyOutFile,
+    [string[]]$RemoteAddress = @()
 )
 $ErrorActionPreference = 'Stop'
 
@@ -65,10 +71,12 @@ if ($RotateKey -or -not (Test-Path $keyFile)) {
     Write-Host 'Clave nueva generada.'
 }
 
+$allowedFrom = @('LocalSubnet') + $RemoteAddress
+$scope = if ($RemoteAddress) { "subred local y $($RemoteAddress -join ', ')" } else { 'solo subred local' }
 Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue | Remove-NetFirewallRule
 New-NetFirewallRule -DisplayName $ruleName `
-    -Description 'Órdenes autenticadas de Altair Wake (estado, suspender, apagar). Solo subred local.' `
-    -Direction Inbound -Protocol TCP -LocalPort $Port -RemoteAddress LocalSubnet `
+    -Description ('Órdenes autenticadas de Altair Wake (estado, suspender, apagar). Origen: ' + $scope + '.') `
+    -Direction Inbound -Protocol TCP -LocalPort $Port -RemoteAddress $allowedFrom `
     -Program $exeTarget -Action Allow -Profile Any | Out-Null
 
 $arguments = "--key-file `"$keyFile`" --port $Port --log-file `"$logFile`""
@@ -86,6 +94,6 @@ Start-Sleep -Seconds 2
 $listening = Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue
 if (-not $listening) { throw "El agente no está escuchando en el puerto $Port. Revisa $logFile" }
 
-Write-Host "Agente instalado y escuchando en TCP $Port (solo subred local)."
+Write-Host "Agente instalado y escuchando en TCP $Port ($scope)."
 if ($ShowKey) { Write-Host "Clave: $(Get-Content $keyFile -Raw)" }
 if ($KeyOutFile) { Copy-Item $keyFile $KeyOutFile -Force }
